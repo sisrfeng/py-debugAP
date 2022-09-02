@@ -1,6 +1,8 @@
 # nvim-dap-python
 
-An extension for [nvim-dap][1] providing default configurations for python and methods to debug individual test methods or classes.
+An extension for [nvim-dap][1] providing default configurations for python and
+methods to debug ¿individual¿ test methods or  classes.
+
 
 
 ## Installation
@@ -12,14 +14,12 @@ An extension for [nvim-dap][1] providing default configurations for python and m
   - If using [vim-plug][6]: `Plug 'mfussenegger/nvim-dap-python'`
   - If using [packer.nvim][7]: `use 'mfussenegger/nvim-dap-python'`
 
-If you want to use the test runner functionality, it additionally requires a
-tree sitter parser for Python.
-
+If you want to use the test runner functionality,
+it additionally requires a tree sitter parser for Python.   
 
 ### Debugpy
 
-It is recommended to install debugpy into a dedicated virtualenv. To do so:
-
+It is recommended to install debugpy into a dedicated virtualenv. To do so: 
 ```bash
 mkdir .virtualenvs
 cd .virtualenvs
@@ -27,8 +27,9 @@ python -m venv debugpy
 debugpy/bin/python -m pip install debugpy
 ```
 
-The debugger will automatically pick-up another virtual environment if it is
-activated before neovim is started.
+The debugger will automatically pick-up another virtual environment
+if it is activated before neovim is started. 
+
 
 
 ### Tree-sitter

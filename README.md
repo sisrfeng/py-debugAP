@@ -60,12 +60,12 @@ The argument to `setup` is the path to the python installation which contains th
 - See `:help dap-mappings` and `:help dap-api`.
 - Use `:lua require('dap-python').test_method()` to debug the closest method above the cursor.
 
-Supported test frameworks are `unittest`, `pytest` and `django`. It defaults to using
-`unittest`.
+Supported test frameworks are `unittest`, `pytest` and `django`. By default it
+tries to detect the runner by probing for `pytest.ini` and `manage.py`, if
+neither are present it defaults to `unittest`.
 
 To configure a different runner, change the `test_runner` variable. For example
 to configure `pytest` set the test runner like this in `vimL`:
-
 
 ```vimL
 lua require('dap-python').test_runner = 'pytest'
@@ -126,6 +126,22 @@ An alternative is to use project specific `.vscode/launch.json` files, see `:hel
 
 
 The [Debugpy Wiki][debugpy_wiki] contains a list of all supported configuration options.
+
+
+## Python dependencies and virtualenv
+
+`nvim-dap-python` by default looks for `VIRTUAL_ENV` and `CONDA_PREFIX`
+environment variables and if present uses these environments to execute your
+application or tests.
+
+If you're using another way to manage virtual environments, you can set a
+custom `resolve_python` function:
+
+```lua
+require('dap-python').resolve_python = function()
+  return '/absolute/path/to/python'
+end
+```
 
 
 ## Alternatives

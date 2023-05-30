@@ -3,19 +3,39 @@
 local api = vim.api
 local M = {}
 
---- Test runner to use by default. Default is "unittest". See |dap-python.test_runners|
+--- Test runner to use by default.
+--- The default value is dynamic and depends on `pytest.ini` or `manage.py` markers.
+--- If neither is found "unittest" is used. See |dap-python.test_runners|
 --- Override this to set a different runner:
 --- ```
 --- require('dap-python').test_runner = "pytest"
 --- ```
----@type string name of the test runner
-M.test_runner = 'unittest'
+---@type (string|fun():string) name of the test runner
+M.test_runner = nil
+
+
+--- Function to resolve path to python to use for program or test execution.
+--- By default the `VIRTUAL_ENV` and `CONDA_PREFIX` environment variables are
+--- used if present.
+---@type nil|fun():nil|string name of the test runner
+M.resolve_python = nil
+
+
+local function default_runner()
+  if vim.loop.fs_stat('pytest.ini') then
+    return 'pytest'
+  elseif vim.loop.fs_stat('manage.py') then
+    return 'django'
+  else
+    return 'unittest'
+  end
+end
 
 --- Table to register test runners.
 --- Built-in are test runners for unittest, pytest and django.
 --- The key is the test runner name, the value a function to generate the
---- module name to run and its arguments. See |TestRunner|
----@type table<string, TestRunner>
+--- module name to run and its arguments. See |dap-python.TestRunner|
+---@type table<string,TestRunner>
 M.test_runners = {}
 
 local function prune_nil(items)
@@ -28,12 +48,25 @@ end
 
 
 local get_python_path = function()
-  local venv_path = os.getenv('VIRTUAL_ENV') or os.getenv('CONDA_PREFIX')
+  local venv_path = os.getenv('VIRTUAL_ENV')
   if venv_path then
     if is_windows() then
-        return venv_path .. '\\Scripts\\python.exe'
+      return venv_path .. '\\Scripts\\python.exe'
     end
     return venv_path .. '/bin/python'
+  end
+
+  venv_path = os.getenv("CONDA_PREFIX")
+  if venv_path then
+    if is_windows() then
+      return venv_path .. '\\python.exe'
+    end
+    return venv_path .. '/bin/python'
+  end
+
+  if M.resolve_python then
+    assert(type(M.resolve_python) == "function", "resolve_python must be a function")
+    return M.resolve_python()
   end
   return nil
 end
@@ -65,9 +98,17 @@ local function load_dap()
 end
 
 
+local function get_module_path()
+  if is_windows() then
+    return vim.fn.expand('%:.:r:gs?\\?.?')
+  else
+    return vim.fn.expand('%:.:r:gs?/?.?')
+  end
+end
+
 ---@private
 function M.test_runners.unittest(classname, methodname)
-  local path = vim.fn.expand('%:.:r:gs?/?.?')
+  local path = get_module_path()
   local test_path = table.concat(prune_nil({path, classname, methodname}), '.')
   local args = {'-v', test_path}
   return 'unittest', args
@@ -86,7 +127,7 @@ end
 
 ---@private
 function M.test_runners.django(classname, methodname)
-  local path = vim.fn.expand('%:r:gs?/?.?')
+  local path = get_module_path()
   local test_path = table.concat(prune_nil({path, classname, methodname}), '.')
   local args = {'test', test_path}
   return 'django', args
@@ -95,19 +136,22 @@ end
 
 --- Register the python debug adapter
 ---@param adapter_python_path string|nil Path to the python interpreter. Path must be absolute or in $PATH and needs to have the debugpy package installed. Default is `python3`
----@param opts SetupOpts|nil See |SetupOpts|
+---@param opts SetupOpts|nil See |dap-python.SetupOpts|
 function M.setup(adapter_python_path, opts)
   local dap = load_dap()
-  adapter_python_path = adapter_python_path and vim.fn.expand(vim.fn.trim(adapter_python_path)) or 'python3'
+  adapter_python_path = adapter_python_path and vim.fn.expand(vim.fn.trim(adapter_python_path), true) or 'python3'
   opts = vim.tbl_extend('keep', opts or {}, default_setup_opts)
   dap.adapters.python = function(cb, config)
     if config.request == 'attach' then
+      ---@diagnostic disable-next-line: undefined-field
       local port = (config.connect or config).port
+      ---@diagnostic disable-next-line: undefined-field
+      local host = (config.connect or config).host or '127.0.0.1'
       cb({
-        type = 'server';
-        port = assert(port, '`connect.port` is required for a python `attach` configuration');
-        host = (config.connect or config).host or '127.0.0.1';
-        enrich_config = enrich_config;
+        type = 'server',
+        port = assert(port, '`connect.port` is required for a python `attach` configuration'),
+        host = host,
+        enrich_config = enrich_config,
         options = {
           source_filetype = 'python',
         }
@@ -177,7 +221,10 @@ local function get_nodes(query_text, predicate)
   local end_row = api.nvim_win_get_cursor(0)[1]
   local ft = api.nvim_buf_get_option(0, 'filetype')
   assert(ft == 'python', 'test_method of dap-python only works for python files, not ' .. ft)
-  local query = vim.treesitter.parse_query(ft, query_text)
+  local query = (vim.treesitter.query.parse
+    and vim.treesitter.query.parse(ft, query_text)
+    or vim.treesitter.parse_query(ft, query_text)
+  )
   assert(query, 'Could not parse treesitter query. Cannot find test')
   local parser = vim.treesitter.get_parser(0)
   local root = (parser:parse()[1]):root()
@@ -244,7 +291,10 @@ end
 
 ---@param opts DebugOpts
 local function trigger_test(classname, methodname, opts)
-  local test_runner = opts.test_runner or M.test_runner
+  local test_runner = opts.test_runner or (M.test_runner or default_runner)
+  if type(test_runner) == "function" then
+    test_runner = test_runner()
+  end
   local runner = M.test_runners[test_runner]
   if not runner then
     vim.notify('Test runner `' .. test_runner .. '` not supported', vim.log.levels.WARN)
@@ -282,7 +332,7 @@ end
 
 
 --- Run test class above cursor
----@param opts DebugOpts See |DebugOpts|
+---@param opts? DebugOpts See |dap-python.DebugOpts|
 function M.test_class(opts)
   opts = vim.tbl_extend('keep', opts or {}, default_test_opts)
   local class_node = closest_above_cursor(get_class_nodes())
@@ -296,7 +346,7 @@ end
 
 
 --- Run the test method above cursor
----@param opts DebugOpts See |DebugOpts|
+---@param opts? DebugOpts See |dap-python.DebugOpts|
 function M.test_method(opts)
   opts = vim.tbl_extend('keep', opts or {}, default_test_opts)
   local function_node = closest_above_cursor(get_function_nodes())
@@ -331,7 +381,7 @@ end
 
 
 --- Debug the selected code
----@param opts DebugOpts
+---@param opts? DebugOpts
 function M.debug_selection(opts)
   opts = vim.tbl_extend('keep', opts or {}, default_test_opts)
   local start_row, _ = unpack(api.nvim_buf_get_mark(0, '<'))
@@ -371,24 +421,24 @@ end
 ---@field code string|nil Code to execute in string form
 ---@field python string[]|nil Path to python executable and interpreter arguments
 ---@field args string[]|nil Command line arguments passed to the program
----@field console DebugpyConsole See |DebugpyConsole|
+---@field console DebugpyConsole See |dap-python.DebugpyConsole|
 ---@field cwd string|nil Absolute path to the working directory of the program being debugged.
 ---@field env table|nil Environment variables defined as key value pair
 ---@field stopOnEntry boolean|nil Stop at first line of user code.
 
 
 ---@class DebugOpts
----@field console DebugpyConsole See |DebugpyConsole|
+---@field console DebugpyConsole See |dap-python.DebugpyConsole|
 ---@field test_runner "unittest"|"pytest"|"django"|string name of the test runner. Default is |dap-python.test_runner|
 ---@field config DebugpyConfig Overrides for the configuration
 
 ---@class SetupOpts
 ---@field include_configs boolean Add default configurations
----@field console DebugpyConsole See |DebugpyConsole|
+---@field console DebugpyConsole See |dap-python.DebugpyConsole|
 ---@field pythonPath string|nil Path to python interpreter. Uses interpreter from `VIRTUAL_ENV` environment variable or `adapter_python_path` by default
 
 
----@alias TestRunner fun(classname: string, methodname: string): string module, string[] args
+---@alias TestRunner fun(classname: string, methodname: string):string, string[]
 
 ---@alias DebugpyConsole "internalConsole"|"integratedTerminal"|"externalTerminal"|nil
 
